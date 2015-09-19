@@ -358,11 +358,12 @@ namespace Brutal.Dev.StrongNameSigner.UI
       int referenceFixes = 0;
       var assemblyPaths = e.Argument as IEnumerable<string>;
       var processedAssemblyPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+      var signedAssemblyPaths = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
       if (assemblyPaths != null)
       {
-        // We go through assemblies twice and every assembly -1 for reference fixes.
-        double progressMax = (assemblyPaths.Count() + (assemblyPaths.Count() * (assemblyPaths.Count() - 1))) * 2;
+        // We go through assemblies three times and every assembly -1 for reference fixes.
+        double progressMax = (assemblyPaths.Count() + (assemblyPaths.Count() * (assemblyPaths.Count() - 1))) * 3;
         
         foreach (var filePath in assemblyPaths)
         {
@@ -377,6 +378,7 @@ namespace Brutal.Dev.StrongNameSigner.UI
             {
               assemblyPair.NewInfo = SigningHelper.SignAssembly(filePath, keyFile, outputPath, password);
               log.Append("Strong-name signed successfully.").AppendLine();
+              signedAssemblyPaths.Add(filePath);
               signedFiles++;
             }
             else
@@ -416,7 +418,7 @@ namespace Brutal.Dev.StrongNameSigner.UI
             }
 
             log.AppendFormat("Fixing references to {1} in {0}...", filePath, reference).AppendLine();
-            if (SigningHelper.FixAssemblyReference(filePath, reference))
+            if (SigningHelper.FixAssemblyReference(filePath, reference, keyFile, password, assemblyPaths.Select(f => Path.GetDirectoryName(f)).Distinct().ToArray()))
             {
               log.Append("Reference was found and fixed.").AppendLine();
               referenceFixes++;
@@ -425,6 +427,29 @@ namespace Brutal.Dev.StrongNameSigner.UI
             {
               log.Append("Nothing to fix.").AppendLine();
             }
+          }
+        }
+
+        // Go through all processed assemblies and remove invalid friend references.
+        foreach (var filePath in signedAssemblyPaths)
+        {
+          backgroundWorker.ReportProgress(Convert.ToInt32((++progress / progressMax) * 100));
+
+          if (backgroundWorker.CancellationPending)
+          {
+            e.Cancel = true;
+            break;
+          }
+
+          log.AppendFormat("Removing invalid friend references from '{0}'...", filePath).AppendLine();
+          if (SigningHelper.RemoveInvalidFriendAssemblies(filePath, keyFile, password, assemblyPaths.Select(f => Path.GetDirectoryName(f)).Distinct().ToArray()))
+          {
+            log.Append("Invalid friend assemblies removed.").AppendLine();
+            referenceFixes++;
+          }
+          else
+          {
+            log.Append("Nothing to fix.").AppendLine();
           }
         }
 

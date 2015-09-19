@@ -14,6 +14,8 @@ namespace Brutal.Dev.StrongNameSigner
   /// </summary>
   public static class SigningHelper
   {
+    private static byte[] keyPairCache = null;
+
     /// <summary>
     /// Generates a 1024 bit the strong-name key pair that can be written to an SNK file.
     /// </summary>
@@ -60,7 +62,7 @@ namespace Brutal.Dev.StrongNameSigner
     /// <exception cref="System.IO.FileNotFoundException">
     /// Could not find provided assembly file.
     /// or
-    /// Could not find provided strong-name key file file.
+    /// Could not find provided strong-name key file.
     /// </exception>
     /// <exception cref="System.BadImageFormatException">
     /// The file is not a .NET managed assembly.
@@ -77,19 +79,16 @@ namespace Brutal.Dev.StrongNameSigner
     /// <param name="keyPath">The path to the strong-name key file you want to use (.snk or .pfx).</param>
     /// <param name="outputPath">The directory path where the strong-name signed assembly will be copied to.</param>
     /// <param name="keyFilePassword">The password for the provided strong-name key file.</param>
-    /// <returns>The assembly information of the new strong-name signed assembly.</returns>
-    /// <exception cref="System.ArgumentNullException">
-    /// assemblyPath parameter was not provided.
-    /// </exception>
-    /// <exception cref="System.IO.FileNotFoundException">
-    /// Could not find provided assembly file.
+    /// <param name="probingPaths">Additional paths to probe for references.</param>
+    /// <returns>
+    /// The assembly information of the new strong-name signed assembly.
+    /// </returns>
+    /// <exception cref="System.ArgumentNullException">assemblyPath parameter was not provided.</exception>
+    /// <exception cref="System.IO.FileNotFoundException">Could not find provided assembly file.
     /// or
-    /// Could not find provided strong-name key file file.
-    /// </exception>
-    /// <exception cref="System.BadImageFormatException">
-    /// The file is not a .NET managed assembly.
-    /// </exception>
-    public static AssemblyInfo SignAssembly(string assemblyPath, string keyPath, string outputPath, string keyFilePassword)
+    /// Could not find provided strong-name key file.</exception>
+    /// <exception cref="System.BadImageFormatException">The file is not a .NET managed assembly.</exception>
+    public static AssemblyInfo SignAssembly(string assemblyPath, string keyPath, string outputPath, string keyFilePassword, params string[] probingPaths)
     {
       // Verify assembly path was passed in.
       if (string.IsNullOrWhiteSpace(assemblyPath))
@@ -138,7 +137,7 @@ namespace Brutal.Dev.StrongNameSigner
 
       try
       {
-        AssemblyDefinition.ReadAssembly(assemblyPath, GetReadParameters(assemblyPath))
+        AssemblyDefinition.ReadAssembly(assemblyPath, GetReadParameters(assemblyPath, probingPaths))
           .Write(outputFile, new WriterParameters() { StrongNameKeyPair = GetStrongNameKeyPair(keyPath, keyFilePassword) });
       }
       catch (Exception)
@@ -159,14 +158,13 @@ namespace Brutal.Dev.StrongNameSigner
     /// Gets .NET assembly information.
     /// </summary>
     /// <param name="assemblyPath">The path to an assembly you want to get information from.</param>
-    /// <returns>The assembly information.</returns>
-    /// <exception cref="System.ArgumentNullException">
-    /// assemblyPath parameter was not provided.
-    /// </exception>
-    /// <exception cref="System.IO.FileNotFoundException">
-    /// Could not find provided assembly file.
-    /// </exception>
-    public static AssemblyInfo GetAssemblyInfo(string assemblyPath)
+    /// <param name="probingPaths">Additional paths to probe for references.</param>
+    /// <returns>
+    /// The assembly information.
+    /// </returns>
+    /// <exception cref="System.ArgumentNullException">assemblyPath parameter was not provided.</exception>
+    /// <exception cref="System.IO.FileNotFoundException">Could not find provided assembly file.</exception>
+    public static AssemblyInfo GetAssemblyInfo(string assemblyPath, params string[] probingPaths)
     {
       // Verify assembly path was passed in.
       if (string.IsNullOrWhiteSpace(assemblyPath))
@@ -180,7 +178,7 @@ namespace Brutal.Dev.StrongNameSigner
         throw new FileNotFoundException("Could not find provided assembly file.", assemblyPath);
       }
 
-      var a = AssemblyDefinition.ReadAssembly(assemblyPath, GetReadParameters(assemblyPath));
+      var a = AssemblyDefinition.ReadAssembly(assemblyPath, GetReadParameters(assemblyPath, probingPaths));
 
       return new AssemblyInfo()
       {
@@ -193,12 +191,13 @@ namespace Brutal.Dev.StrongNameSigner
         Is32BitPreferred = a.MainModule.Attributes.HasFlag(ModuleAttributes.Preferred32Bit)
       };
     }
-
+    
     /// <summary>
     /// Fixes an assembly reference.
     /// </summary>
     /// <param name="assemblyPath">The path to the assembly you want to fix a reference for.</param>    
     /// <param name="referenceAssemblyPath">The path to the reference assembly path you want to fix in the first assembly.</param>
+    /// <returns><c>true</c> if an assembly reference was found and fixed, <c>false</c> if no reference was found.</returns>
     /// <exception cref="System.ArgumentNullException">
     /// assemblyPath was not provided.
     /// or
@@ -210,6 +209,28 @@ namespace Brutal.Dev.StrongNameSigner
     /// Could not find provided reference assembly file.
     /// </exception>
     public static bool FixAssemblyReference(string assemblyPath, string referenceAssemblyPath)
+    {
+      return FixAssemblyReference(assemblyPath, referenceAssemblyPath, string.Empty, string.Empty);
+    }
+
+    /// <summary>
+    /// Fixes an assembly reference.
+    /// </summary>
+    /// <param name="assemblyPath">The path to the assembly you want to fix a reference for.</param>
+    /// <param name="referenceAssemblyPath">The path to the reference assembly path you want to fix in the first assembly.</param>
+    /// <param name="keyPath">The path to the strong-name key file you want to use (.snk or .pfx).</param>
+    /// <param name="keyFilePassword">The password for the provided strong-name key file.</param>
+    /// <param name="probingPaths">Additional paths to probe for references.</param>
+    /// <returns>
+    ///   <c>true</c> if an assembly reference was found and fixed, <c>false</c> if no reference was found.
+    /// </returns>
+    /// <exception cref="System.ArgumentNullException">assemblyPath was not provided.
+    /// or
+    /// referenceAssemblyPath was not provided.</exception>
+    /// <exception cref="System.IO.FileNotFoundException">Could not find provided assembly file.
+    /// or
+    /// Could not find provided reference assembly file.</exception>
+    public static bool FixAssemblyReference(string assemblyPath, string referenceAssemblyPath, string keyPath, string keyFilePassword, params string[] probingPaths)
     {
       // Verify assembly path was passed in.
       if (string.IsNullOrWhiteSpace(assemblyPath))
@@ -234,10 +255,10 @@ namespace Brutal.Dev.StrongNameSigner
       }
 
       bool fixApplied = false;
-      var a = AssemblyDefinition.ReadAssembly(assemblyPath, GetReadParameters(assemblyPath));
-      var b = AssemblyDefinition.ReadAssembly(referenceAssemblyPath, GetReadParameters(referenceAssemblyPath));
+      var a = AssemblyDefinition.ReadAssembly(assemblyPath, GetReadParameters(assemblyPath, probingPaths));
+      var b = AssemblyDefinition.ReadAssembly(referenceAssemblyPath, GetReadParameters(referenceAssemblyPath, probingPaths));
       
-      var assemblyReference = a.MainModule.AssemblyReferences.FirstOrDefault(r => r.Name == b.Name.Name && r.Version == b.Name.Version);
+      var assemblyReference = a.MainModule.AssemblyReferences.FirstOrDefault(r => r.Name == b.Name.Name);
 
       if (assemblyReference != null)
       {
@@ -245,8 +266,10 @@ namespace Brutal.Dev.StrongNameSigner
         if (BitConverter.ToString(assemblyReference.PublicKeyToken) != BitConverter.ToString(b.Name.PublicKeyToken))
         {
           assemblyReference.PublicKeyToken = b.Name.PublicKeyToken ?? new byte[0];
+          assemblyReference.Version = b.Name.Version;
 
-          a.Write(assemblyPath);
+          // Save and resign.
+          a.Write(assemblyPath, new WriterParameters { StrongNameKeyPair = GetStrongNameKeyPair(keyPath, keyFilePassword) });
 
           fixApplied = true;
         }
@@ -262,7 +285,8 @@ namespace Brutal.Dev.StrongNameSigner
         friendReference.ConstructorArguments.Clear();
         friendReference.ConstructorArguments.Add(new CustomAttributeArgument(typeRef, a.Name.Name + ", PublicKey=" + BitConverter.ToString(a.Name.PublicKey).Replace("-", string.Empty)));
 
-        b.Write(referenceAssemblyPath);
+        // Save and resign.
+        b.Write(referenceAssemblyPath, new WriterParameters { StrongNameKeyPair = GetStrongNameKeyPair(keyPath, keyFilePassword) });
 
         fixApplied = true;
       }
@@ -270,13 +294,90 @@ namespace Brutal.Dev.StrongNameSigner
       return fixApplied;
     }
 
-    private static ReaderParameters GetReadParameters(string assemblyPath)
+    /// <summary>
+    /// Removes any friend assembly references (InternalsVisibleTo attributes) that do not have public keys.
+    /// </summary>
+    /// <param name="assemblyPath">The path to the assembly you want to remove friend references from.</param>
+    /// <returns><c>true</c> if any invalid friend references were found and fixed, <c>false</c> if no invalid friend references was found.</returns>
+    /// <exception cref="System.ArgumentNullException">
+    /// assemblyPath was not provided.
+    /// </exception>
+    /// <exception cref="System.IO.FileNotFoundException">
+    /// Could not find provided assembly file.
+    /// </exception>
+    public static bool RemoveInvalidFriendAssemblies(string assemblyPath)
+    {
+      return RemoveInvalidFriendAssemblies(assemblyPath, string.Empty, string.Empty);
+    }
+
+    /// <summary>
+    /// Removes any friend assembly references (InternalsVisibleTo attributes) that do not have public keys.
+    /// </summary>
+    /// <param name="assemblyPath">The path to the assembly you want to remove friend references from.</param>
+    /// <param name="keyPath">The path to the strong-name key file you want to use (.snk or .pfx).</param>
+    /// <param name="keyFilePassword">The password for the provided strong-name key file.</param>
+    /// <param name="probingPaths">Additional paths to probe for references.</param>
+    /// <returns>
+    ///   <c>true</c> if any invalid friend references were found and fixed, <c>false</c> if no invalid friend references was found.
+    /// </returns>
+    /// <exception cref="System.ArgumentNullException">assemblyPath was not provided.</exception>
+    /// <exception cref="System.IO.FileNotFoundException">Could not find provided assembly file.</exception>
+    public static bool RemoveInvalidFriendAssemblies(string assemblyPath, string keyPath, string keyFilePassword, params string[] probingPaths)
+    {
+      // Verify assembly path was passed in.
+      if (string.IsNullOrWhiteSpace(assemblyPath))
+      {
+        throw new ArgumentNullException("assemblyPath");
+      }
+
+      // Make sure the file actually exists.
+      if (!File.Exists(assemblyPath))
+      {
+        throw new FileNotFoundException("Could not find provided assembly file.", assemblyPath);
+      }
+
+      bool fixApplied = false;
+      var a = AssemblyDefinition.ReadAssembly(assemblyPath, GetReadParameters(assemblyPath, probingPaths));
+
+      var ivtAttributes = a.CustomAttributes.Where(attr => attr.AttributeType.FullName == typeof(InternalsVisibleToAttribute).FullName).ToList();
+
+      foreach (var friendReference in ivtAttributes)
+      {
+        // Find any without a public key defined.
+        if (friendReference.HasConstructorArguments && friendReference.ConstructorArguments.Any(ca => ca.Value != null && ca.Value.ToString().IndexOf("PublicKey=", StringComparison.Ordinal) == -1))
+        {
+          a.CustomAttributes.Remove(friendReference);
+          fixApplied = true;
+        }
+      }
+
+      if (fixApplied)
+      {
+        // Save and resign.
+        a.Write(assemblyPath, new WriterParameters { StrongNameKeyPair = GetStrongNameKeyPair(keyPath, keyFilePassword) });
+      }
+
+      return fixApplied;
+    }
+
+    private static ReaderParameters GetReadParameters(string assemblyPath, string[] probingPaths)
     {
       var resolver = new DefaultAssemblyResolver();
 
       if (!string.IsNullOrEmpty(assemblyPath) && File.Exists(assemblyPath))
       {
         resolver.AddSearchDirectory(Path.GetDirectoryName(assemblyPath));
+      }
+
+      if (probingPaths != null)
+      {
+        foreach (var searchDir in probingPaths)
+        {
+          if (Directory.Exists(searchDir))
+          {
+            resolver.AddSearchDirectory(searchDir);
+          }
+        }
       }
 
       return new ReaderParameters() { AssemblyResolver = resolver };
@@ -301,8 +402,6 @@ namespace Brutal.Dev.StrongNameSigner
 
     private static StrongNameKeyPair GetStrongNameKeyPair(string keyPath, string keyFilePassword)
     {
-      byte[] keyPairArray = null;
-
       if (!string.IsNullOrEmpty(keyPath))
       {
         if (!string.IsNullOrEmpty(keyFilePassword))
@@ -315,19 +414,25 @@ namespace Brutal.Dev.StrongNameSigner
             throw new InvalidOperationException("The key file is not password protected or the incorrect password was provided.");
           }
 
-          keyPairArray = provider.ExportCspBlob(true);
+          return new StrongNameKeyPair(provider.ExportCspBlob(true));
         }
         else
         {
-          keyPairArray = File.ReadAllBytes(keyPath);
+          return new StrongNameKeyPair(File.ReadAllBytes(keyPath));
         }
       }
       else
       {
-        keyPairArray = GenerateStrongNameKeyPair();
-      }
+        // Only cache generated keys so all signed assemblies use the same public key.
+        if (keyPairCache != null)
+        {
+          return new StrongNameKeyPair(keyPairCache);
+        }
 
-      return new StrongNameKeyPair(keyPairArray);
+        keyPairCache = GenerateStrongNameKeyPair();
+
+        return new StrongNameKeyPair(keyPairCache);
+      }
     }
   }
 }
